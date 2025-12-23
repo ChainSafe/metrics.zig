@@ -591,6 +591,30 @@ test "Histogram: simple" {
         \\hst_1_count 1
         \\
     , arr.items);
+
+    arr.clearRetainingCapacity();
+    var timer = try h.time();
+    h.observeElapsed(&timer);
+    try h.write(arr.writer());
+    try std.testing.expectStringStartsWith(arr.items,
+        \\# TYPE hst_1 histogram
+        \\hst_1_bucket{le="0.005"} 1
+        \\hst_1_bucket{le="0.01"} 1
+        \\hst_1_bucket{le="0.025"} 1
+        \\hst_1_bucket{le="0.05"} 1
+        \\hst_1_bucket{le="0.1"} 1
+        \\hst_1_bucket{le="0.25"} 1
+        \\hst_1_bucket{le="0.5"} 1
+        \\hst_1_bucket{le="1"} 1
+        \\hst_1_bucket{le="2.5"} 1
+        \\hst_1_bucket{le="5"} 1
+        \\hst_1_bucket{le="10"} 1
+        \\hst_1_bucket{le="+Inf"} 1
+    );
+    try std.testing.expectStringEndsWith(arr.items,
+        \\hst_1_count 1
+        \\
+    );
 }
 
 test "HistogramVec: noop " {
