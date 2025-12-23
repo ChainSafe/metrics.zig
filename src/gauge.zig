@@ -106,8 +106,12 @@ pub fn Gauge(comptime V: type) type {
             }
 
             pub fn observeElapsed(self: *Impl, timer: *Timer) !void {
-                const secs = timer.read();
-                self.set(@intFromFloat(secs));
+                const elapsed = timer.read();
+                switch (@typeInfo(V)) {
+                    .int => self.set(@as(V, @intFromFloat(elapsed))),
+                    .float => self.set(@as(V, @floatCast(elapsed))),
+                    else => @panic("Invalid type"),
+                }
             }
 
             pub fn set(self: *Impl, value: V) void {
@@ -370,14 +374,25 @@ test "Gauge: incr/incrBy/set" {
     try t.expectEqual(-10, g.impl.value);
 }
 
-test "Gauge: time" {
-    var g = Gauge(i32).init("t1", .{}, .{});
-
+fn timeAndTest(T: type) !void {
+    var g = Gauge(T).init("t1", .{}, .{});
     var timer = try g.time();
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    std.Thread.sleep(1);
 
     _ = try g.observeElapsed(&timer);
-    try t.expectEqual(0, g.impl.value);
+    switch (@typeInfo(T)) {
+        .int => try t.expectEqual(0, g.impl.value), // 1ns is too small to be captured,
+        .float => try std.testing.expect(g.impl.value != 0), // but is captureable by float types
+        else => @compileError("should only test ints and floats for observeElapsed"),
+    }
+}
+
+test "Gauge: time" {
+    try timeAndTest(i32);
+    try timeAndTest(u32);
+    try timeAndTest(u64);
+    try timeAndTest(f32);
+    try timeAndTest(f64);
 }
 
 test "Gauge: write" {
