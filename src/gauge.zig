@@ -81,7 +81,7 @@ pub fn Gauge(comptime V: type) type {
 
                 fn read(self: *Timer) f32 {
                     const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                     return secs;
                 }
             };

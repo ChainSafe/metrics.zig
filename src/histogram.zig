@@ -75,7 +75,7 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
 
                 fn read(self: *Timer) f32 {
                     const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                     return secs;
                 }
             };
@@ -282,7 +282,7 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
 
                 fn read(self: *Timer) f32 {
                     const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                     return secs;
                 }
             };
