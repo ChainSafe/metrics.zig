@@ -47,6 +47,20 @@ pub fn Gauge(comptime V: type) type {
             }
         }
 
+        pub fn time(self: *Self) !Impl.Timer {
+            switch (self.*) {
+                .noop => return try Impl.Timer.start(),
+                .impl => |*impl| return impl.time(),
+            }
+        }
+
+        pub fn observeElapsed(self: *Self, timer: *Impl.Timer) !void {
+            switch (self.*) {
+                .noop => {},
+                .impl => |*impl| return try impl.observeElapsed(timer),
+            }
+        }
+
         pub fn write(self: *Self, writer: anytype) !void {
             switch (self.*) {
                 .noop => {},
@@ -57,6 +71,20 @@ pub fn Gauge(comptime V: type) type {
         pub const Impl = struct {
             value: V,
             preamble: []const u8,
+
+            const Timer = struct {
+                inner: std.time.Timer,
+
+                fn start() !Timer {
+                    return .{ .inner = try std.time.Timer.start() };
+                }
+
+                fn read(self: *Timer) f32 {
+                    const ns = self.inner.read();
+                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    return secs;
+                }
+            };
 
             pub fn init(comptime name: []const u8, comptime opts: Opts) Impl {
                 return .{
@@ -71,6 +99,15 @@ pub fn Gauge(comptime V: type) type {
 
             pub fn incrBy(self: *Impl, value: V) void {
                 _ = @atomicRmw(V, &self.value, .Add, value, .monotonic);
+            }
+
+            pub fn time(_: *Impl) !Timer {
+                return try Timer.start();
+            }
+
+            pub fn observeElapsed(self: *Impl, timer: *Timer) !void {
+                const secs = timer.read();
+                self.set(@intFromFloat(secs));
             }
 
             pub fn set(self: *Impl, value: V) void {
@@ -305,6 +342,18 @@ test "Gauge: noop incr/incrBy/set" {
     try t.expectEqual(0, arr.items.len);
 }
 
+test "Gauge: noop time" {
+    // these should just not crash
+    var c = Gauge(u32){ .noop = {} };
+    var timer = try c.time();
+    try c.observeElapsed(&timer);
+
+    var arr = std.ArrayList(u8).init(t.allocator);
+    defer arr.deinit();
+    try c.write(&arr.writer());
+    try t.expectEqual(0, arr.items.len);
+}
+
 test "Gauge: incr/incrBy/set" {
     var g = Gauge(i32).init("t1", .{}, .{});
 
@@ -319,6 +368,16 @@ test "Gauge: incr/incrBy/set" {
 
     g.set(-10);
     try t.expectEqual(-10, g.impl.value);
+}
+
+test "Gauge: time" {
+    var g = Gauge(i32).init("t1", .{}, .{});
+
+    var timer = try g.time();
+    std.Thread.sleep(10 * std.time.ns_per_ms);
+
+    _ = try g.observeElapsed(&timer);
+    try t.expectEqual(0, g.impl.value);
 }
 
 test "Gauge: write" {

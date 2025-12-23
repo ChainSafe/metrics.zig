@@ -35,6 +35,20 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
             }
         }
 
+        pub fn time(self: *Self) !Impl.Timer {
+            switch (self.*) {
+                .noop => return try Impl.Timer.start(),
+                .impl => |*impl| return impl.time(),
+            }
+        }
+
+        pub fn observeElapsed(self: *Self, timer: *Impl.Timer) void {
+            switch (self.*) {
+                .noop => {},
+                .impl => |*impl| impl.observeElapsed(timer),
+            }
+        }
+
         pub fn write(self: *Self, writer: anytype) !void {
             switch (self.*) {
                 .noop => {},
@@ -51,6 +65,20 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
             output_count_prefix: []const u8,
             output_bucket_prefixes: [upper_bounds.len][]const u8,
             output_bucket_inf_prefix: []const u8,
+
+            const Timer = struct {
+                inner: std.time.Timer,
+
+                fn start() !Timer {
+                    return .{ .inner = try std.time.Timer.start() };
+                }
+
+                fn read(self: *Timer) f32 {
+                    const ns = self.inner.read();
+                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    return secs;
+                }
+            };
 
             pub fn init(comptime name: []const u8, comptime opts: Opts) Impl {
                 comptime {
@@ -93,6 +121,19 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
                 };
 
                 _ = @atomicRmw(V, &self.buckets[idx], .Add, 1, .monotonic);
+            }
+
+            pub fn time(_: *Impl) !Timer {
+                return try Timer.start();
+            }
+
+            pub fn observeElapsed(self: *Impl, timer: *Timer) void {
+                const elapsed = timer.read();
+                switch (@typeInfo(V)) {
+                    .int => self.observe(@as(V, @intFromFloat(elapsed))),
+                    .float => self.observe(@as(V, @floatCast(elapsed))),
+                    else => @panic("Invalid type"),
+                }
             }
 
             pub fn write(self: *Impl, writer: anytype) !void {
@@ -158,6 +199,20 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
             }
         }
 
+        pub fn time(self: *Self) !Impl.Timer {
+            switch (self.*) {
+                .noop => return try Impl.Timer.start(),
+                .impl => |*impl| return impl.time(),
+            }
+        }
+
+        pub fn observeElapsed(self: *Self, timer: *Impl.Timer, labels: L) !void {
+            switch (self.*) {
+                .noop => {},
+                .impl => |*impl| return try impl.observeElapsed(timer, labels),
+            }
+        }
+
         pub fn write(self: *Self, writer: anytype) !void {
             switch (self.*) {
                 .noop => {},
@@ -184,6 +239,7 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
             output_count_prefix: []const u8,
             output_bucket_prefixes: [upper_bounds.len][]const u8,
             output_bucket_inf_prefix: []const u8,
+            timer: ?std.time.Timer = null,
 
             const Value = struct {
                 sum: V,
@@ -214,6 +270,20 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
                         }
                     }
                     return null;
+                }
+            };
+
+            const Timer = struct {
+                inner: std.time.Timer,
+
+                fn start() !Timer {
+                    return .{ .inner = try std.time.Timer.start() };
+                }
+
+                fn read(self: *Timer) f32 {
+                    const ns = self.inner.read();
+                    const secs = @as(f32, @floatFromInt(ns)) / 1e9;
+                    return secs;
                 }
             };
 
@@ -327,6 +397,19 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
                 // since we've taking out a write lock out the entire histogram
                 // we can observe this value without taking an inner value lock.
                 gop.value_ptr.observeLocked(value, idx);
+            }
+
+            pub fn time(_: *Impl) !Timer {
+                return try Timer.start();
+            }
+
+            pub fn observeElapsed(self: *Impl, timer: *Timer, labels: L) !void {
+                const elapsed = timer.read();
+                try switch (@typeInfo(V)) {
+                    .int => self.observe(labels, @as(V, @intFromFloat(elapsed))),
+                    .float => self.observe(labels, @as(V, @floatCast(elapsed))),
+                    else => @panic("Invalid type"),
+                };
             }
 
             pub fn remove(self: *Impl, labels: L) void {
@@ -513,6 +596,8 @@ test "HistogramVec: noop " {
     var h = HistogramVec(u32, struct { status: u16 }, &.{0}){ .noop = {} };
     defer h.deinit();
     try h.observe(.{ .status = 200 }, 2);
+    var timer = try h.time();
+    try h.observeElapsed(&timer, .{ .status = 200 });
 
     var arr = std.ArrayList(u8).init(t.allocator);
     defer arr.deinit();
@@ -607,4 +692,39 @@ test "HistogramVec" {
         \\hst_1_count{status="400"} 0
         \\
     , arr.items);
+
+    var timer = try h.time();
+    arr.clearRetainingCapacity();
+    try h.observeElapsed(&timer, .{ .status = 200 });
+    try h.write(arr.writer());
+    var it = std.mem.splitSequence(u8, arr.items, "\n");
+    try t.expectString("# TYPE hst_1 histogram", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.005\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.01\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.025\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.05\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.1\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.25\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.5\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"1\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"2.5\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"5\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"10\",status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"+Inf\",status=\"200\"} 1", it.next().?);
+    _ = it.next(); // skip hst_1_sum{status="200"} because of timer result
+    try t.expectString("hst_1_count{status=\"200\"} 1", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.005\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.01\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.025\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.05\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.1\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.25\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"0.5\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"1\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"2.5\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"5\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"10\",status=\"400\"} 0", it.next().?);
+    try t.expectString("hst_1_bucket{le=\"+Inf\",status=\"400\"} 0", it.next().?);
+    _ = it.next(); // skip hst_1_sum{status="400"} because of timer result
+    try t.expectString("hst_1_count{status=\"400\"} 0", it.next().?);
 }
