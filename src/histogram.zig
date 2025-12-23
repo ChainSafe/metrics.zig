@@ -530,6 +530,8 @@ test "Histogram: noop " {
     // these should just not crash
     var h = Histogram(u32, &.{0}){ .noop = {} };
     h.observe(2);
+    var timer = try h.time();
+    h.observeElapsed(&timer);
 
     var arr = std.ArrayList(u8).init(t.allocator);
     defer arr.deinit();
