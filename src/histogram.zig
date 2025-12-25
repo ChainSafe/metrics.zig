@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Timer = std.time.Timer;
 
 const m = @import("metric.zig");
 const Metric = m.Metric;
@@ -35,14 +36,14 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
             }
         }
 
-        pub fn time(self: *Self) !Impl.Timer {
+        pub fn time(self: *Self) !Timer {
             switch (self.*) {
-                .noop => return try Impl.Timer.start(),
+                .noop => return try Timer.start(),
                 .impl => |*impl| return impl.time(),
             }
         }
 
-        pub fn observeElapsed(self: *Self, timer: *Impl.Timer) void {
+        pub fn observeElapsed(self: *Self, timer: *Timer) void {
             switch (self.*) {
                 .noop => {},
                 .impl => |*impl| impl.observeElapsed(timer),
@@ -65,20 +66,6 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
             output_count_prefix: []const u8,
             output_bucket_prefixes: [upper_bounds.len][]const u8,
             output_bucket_inf_prefix: []const u8,
-
-            const Timer = struct {
-                inner: std.time.Timer,
-
-                fn start() !Timer {
-                    return .{ .inner = try std.time.Timer.start() };
-                }
-
-                fn read(self: *Timer) f32 {
-                    const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    return secs;
-                }
-            };
 
             pub fn init(comptime name: []const u8, comptime opts: Opts) Impl {
                 comptime {
@@ -128,10 +115,12 @@ pub fn Histogram(comptime V: type, comptime upper_bounds: []const V) type {
             }
 
             pub fn observeElapsed(self: *Impl, timer: *Timer) void {
-                const elapsed = timer.read();
+                const ns = timer.read();
+
+                const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                 switch (@typeInfo(V)) {
-                    .int => self.observe(@as(V, @intFromFloat(elapsed))),
-                    .float => self.observe(@as(V, @floatCast(elapsed))),
+                    .int => self.observe(@as(V, @intFromFloat(secs))),
+                    .float => self.observe(@as(V, @floatCast(secs))),
                     else => @panic("Invalid type"),
                 }
             }
@@ -199,14 +188,14 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
             }
         }
 
-        pub fn time(self: *Self) !Impl.Timer {
+        pub fn time(self: *Self) !Timer {
             switch (self.*) {
-                .noop => return try Impl.Timer.start(),
+                .noop => return try Timer.start(),
                 .impl => |*impl| return impl.time(),
             }
         }
 
-        pub fn observeElapsed(self: *Self, timer: *Impl.Timer, labels: L) !void {
+        pub fn observeElapsed(self: *Self, timer: *Timer, labels: L) !void {
             switch (self.*) {
                 .noop => {},
                 .impl => |*impl| return try impl.observeElapsed(timer, labels),
@@ -270,20 +259,6 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
                         }
                     }
                     return null;
-                }
-            };
-
-            const Timer = struct {
-                inner: std.time.Timer,
-
-                fn start() !Timer {
-                    return .{ .inner = try std.time.Timer.start() };
-                }
-
-                fn read(self: *Timer) f32 {
-                    const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    return secs;
                 }
             };
 
@@ -404,10 +379,12 @@ pub fn HistogramVec(comptime V: type, comptime L: type, comptime upper_bounds: [
             }
 
             pub fn observeElapsed(self: *Impl, timer: *Timer, labels: L) !void {
-                const elapsed = timer.read();
+                const ns = timer.read();
+
+                const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                 try switch (@typeInfo(V)) {
-                    .int => self.observe(labels, @as(V, @intFromFloat(elapsed))),
-                    .float => self.observe(labels, @as(V, @floatCast(elapsed))),
+                    .int => self.observe(labels, @as(V, @intFromFloat(secs))),
+                    .float => self.observe(labels, @as(V, @floatCast(secs))),
                     else => @panic("Invalid type"),
                 };
             }

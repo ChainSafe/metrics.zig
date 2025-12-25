@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Timer = std.time.Timer;
 
 const m = @import("metric.zig");
 const Metric = m.Metric;
@@ -47,14 +48,14 @@ pub fn Gauge(comptime V: type) type {
             }
         }
 
-        pub fn time(self: *Self) !Impl.Timer {
+        pub fn time(self: *Self) !Timer {
             switch (self.*) {
-                .noop => return try Impl.Timer.start(),
+                .noop => return try Timer.start(),
                 .impl => |*impl| return impl.time(),
             }
         }
 
-        pub fn observeElapsed(self: *Self, timer: *Impl.Timer) !void {
+        pub fn observeElapsed(self: *Self, timer: *Timer) !void {
             switch (self.*) {
                 .noop => {},
                 .impl => |*impl| return try impl.observeElapsed(timer),
@@ -71,20 +72,6 @@ pub fn Gauge(comptime V: type) type {
         pub const Impl = struct {
             value: V,
             preamble: []const u8,
-
-            const Timer = struct {
-                inner: std.time.Timer,
-
-                fn start() !Timer {
-                    return .{ .inner = try std.time.Timer.start() };
-                }
-
-                fn read(self: *Timer) f32 {
-                    const ns = self.inner.read();
-                    const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
-                    return secs;
-                }
-            };
 
             pub fn init(comptime name: []const u8, comptime opts: Opts) Impl {
                 return .{
@@ -106,10 +93,11 @@ pub fn Gauge(comptime V: type) type {
             }
 
             pub fn observeElapsed(self: *Impl, timer: *Timer) !void {
-                const elapsed = timer.read();
+                const ns = timer.read();
+                const secs = @as(f32, @floatFromInt(ns)) / std.time.ns_per_s;
                 switch (@typeInfo(V)) {
-                    .int => self.set(@as(V, @intFromFloat(elapsed))),
-                    .float => self.set(@as(V, @floatCast(elapsed))),
+                    .int => self.set(@as(V, @intFromFloat(secs))),
+                    .float => self.set(@as(V, @floatCast(secs))),
                     else => @panic("Invalid type"),
                 }
             }
